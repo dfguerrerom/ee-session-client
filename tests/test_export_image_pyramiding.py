@@ -1,3 +1,4 @@
+import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -78,7 +79,11 @@ async def test_image_to_asset_async_forwards_pyramiding_to_the_request():
             pyramiding_policy_overrides={"B1": "min"},
         )
 
-    asset_options = client.rest_call.await_args.kwargs["data"]["assetExportOptions"]
+    # Asserted through json, because `rest_call` hands `data` to httpx as
+    # `json=` -- a policy that stringified as "PyramidingPolicy.MODE" would
+    # still compare equal to "MODE" here as a str enum.
+    body = json.loads(json.dumps(client.rest_call.await_args.kwargs["data"]))
+    asset_options = body["assetExportOptions"]
     assert asset_options["pyramidingPolicy"] == "MODE"
     assert asset_options["pyramidingPolicyOverrides"] == {"B1": "MIN"}
 
