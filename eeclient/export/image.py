@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import TYPE_CHECKING, Optional, Union
+from typing import TYPE_CHECKING, Dict, Optional, Union
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 from pydantic.alias_generators import to_camel
 
@@ -66,8 +66,34 @@ class DriveOptions(BaseExportModel):
     # See the api: https://developers.google.com/earth-engine/reference/rest/v1alpha/ImageFileExportOptions
 
 
+class PyramidingPolicy(str, Enum):
+    """Reducer that builds an asset's overview levels.
+
+    The server default is ``MEAN``, which averages class codes across every
+    overview of a categorical image and renders it wrong below native zoom.
+    Such images want ``MODE`` or ``SAMPLE``.
+    """
+
+    MEAN = "MEAN"
+    SAMPLE = "SAMPLE"
+    MIN = "MIN"
+    MAX = "MAX"
+    MODE = "MODE"
+    MEDIAN = "MEDIAN"
+
+    @classmethod
+    def _missing_(cls, value):
+        # ``ee.batch`` upper-cases whatever the caller passes, so callers are
+        # used to writing "mode".
+        if isinstance(value, str):
+            return cls.__members__.get(value.upper())
+        return None
+
+
 class AssetOptions(BaseExportModel):
     earth_engine_destination: EarthEngineDestination
+    pyramiding_policy: Optional[PyramidingPolicy] = None
+    pyramiding_policy_overrides: Optional[Dict[str, PyramidingPolicy]] = None
 
 
 class GridDimensions(BaseModel):
@@ -267,6 +293,8 @@ async def image_to_asset_async(
     scale: Optional[float] = None,
     crs: Optional[str] = None,
     crs_transform: Optional[AffineTransform] = None,
+    pyramiding_policy: Optional[PyramidingPolicy] = None,
+    pyramiding_policy_overrides: Optional[Dict[str, PyramidingPolicy]] = None,
 ) -> Task:
     """Abstracts the export of an image to Earth Engine Asset.
 
@@ -275,6 +303,8 @@ async def image_to_asset_async(
     """
     asset_options = AssetOptions(
         earth_engine_destination=EarthEngineDestination(name=asset_id),
+        pyramiding_policy=pyramiding_policy,
+        pyramiding_policy_overrides=pyramiding_policy_overrides,
     )
 
     return await _export_image(
