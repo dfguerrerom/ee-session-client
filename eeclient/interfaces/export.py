@@ -1,5 +1,10 @@
-from typing import Optional, Protocol, Union, Any
-from eeclient.export.image import ImageFileFormat, PixelGrid, AffineTransform
+from typing import Any, Dict, Optional, Protocol, Union
+from eeclient.export.image import (
+    AffineTransform,
+    ImageFileFormat,
+    PixelGrid,
+    PyramidingPolicy,
+)
 from eeclient.export.table import TableFileFormat
 
 
@@ -18,6 +23,8 @@ class ExportProtocol(Protocol):
         scale: Optional[float] = ...,
         crs: Optional[str] = ...,
         crs_transform: Optional[AffineTransform] = ...,
+        pyramiding_policy: Optional[PyramidingPolicy] = ...,
+        pyramiding_policy_overrides: Optional[Dict[str, PyramidingPolicy]] = ...,
     ) -> dict: ...
 
     async def image_to_drive_async(

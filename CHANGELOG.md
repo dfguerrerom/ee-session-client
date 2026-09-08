@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+### Features
+
+- `image_to_asset_async` accepts `pyramiding_policy` and
+  `pyramiding_policy_overrides`, forwarded to the request as
+  `assetExportOptions.pyramidingPolicy` and `pyramidingPolicyOverrides`.
+  `AssetOptions` carried neither, so an asset export always took the server
+  default of `MEAN` — which averages class codes in every overview level of a
+  categorical image and renders it wrong at any zoom below native. Values are a
+  `PyramidingPolicy` (`MEAN`, `SAMPLE`, `MIN`, `MAX`, `MODE`, `MEDIAN`), matched
+  case-insensitively so the lowercase spellings `ee.batch` accepts keep working.
+  (openforis/pysepal#1042)
+
 ## 3.1.2
 
 ### Packaging
