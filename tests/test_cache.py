@@ -250,3 +250,76 @@ async def test_get_assets_concurrent_deduplication():
         assert all(len(r) == 1 for r in results)
         assert all(r[0]["id"] == "test_id" for r in results)
         assert call_count == 1
+
+
+# Cancellation
+
+
+async def _cancel(task):
+    task.cancel()
+    await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_cache_cancelled_caller_leaves_no_stale_none():
+    """A second call within the TTL must fetch again, not read a cancelled entry."""
+    cache = ResponseCache(ttl=10.0, max_size=100)
+    call_count = 0
+
+    async def fetch_data():
+        nonlocal call_count
+        call_count += 1
+        await asyncio.sleep(0.05)
+        return ["asset"]
+
+    key = cache.make_cache_key("folder")
+    first = asyncio.create_task(cache.get_or_fetch(key, fetch_data))
+    await asyncio.sleep(0.01)
+    await _cancel(first)
+
+    assert await cache.get_or_fetch(key, fetch_data) == ["asset"]
+    assert call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_cache_last_caller_to_leave_cancels_the_fetch():
+    """A fetch nobody waits for must not run on, nor stay in the cache."""
+    cache = ResponseCache(ttl=10.0, max_size=100)
+    cancelled = asyncio.Event()
+
+    async def fetch_data():
+        try:
+            await asyncio.sleep(300)
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+
+    key = cache.make_cache_key("folder")
+    caller = asyncio.create_task(cache.get_or_fetch(key, fetch_data))
+    await asyncio.sleep(0.01)
+    await _cancel(caller)
+
+    assert cancelled.is_set()
+    assert key not in cache._cache
+
+
+@pytest.mark.asyncio
+async def test_cache_cancelled_caller_does_not_cancel_the_others():
+    """Callers deduplicated onto one fetch must not lose it when one of them leaves."""
+    cache = ResponseCache(ttl=10.0, max_size=100)
+    call_count = 0
+
+    async def fetch_data():
+        nonlocal call_count
+        call_count += 1
+        await asyncio.sleep(0.05)
+        return ["asset"]
+
+    key = cache.make_cache_key("folder")
+    leaver = asyncio.create_task(cache.get_or_fetch(key, fetch_data))
+    stayer = asyncio.create_task(cache.get_or_fetch(key, fetch_data))
+    await asyncio.sleep(0.01)
+    await _cancel(leaver)
+
+    assert await asyncio.wait_for(stayer, timeout=5.0) == ["asset"]
+    assert call_count == 1

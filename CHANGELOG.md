@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+### Fixes
+
+- `ResponseCache.get_or_fetch` returned `None` for the rest of the TTL after
+  the caller that started a fetch was cancelled: the entry kept a cancelled
+  task and no value. Seen in pysepal's asset selector as
+  `'NoneType' object is not iterable` when the reload icon was clicked twice
+  within 10 s. The entry now settles from the fetch task itself, a cancelled
+  fetch leaves no entry, one cancelled caller no longer cancels the fetch for
+  the other callers waiting on it, and the last caller to leave cancels it so
+  a fetch never outlives its callers.
+
 ## 3.2.0
 
 ### Features
