@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import hashlib
 import json
 import time
@@ -19,6 +20,7 @@ class CacheEntry:
         self.error = error
         self.task = task
         self.timestamp = time.time()
+        self.waiters = 0
 
     def is_expired(self, ttl: float) -> bool:
         """Check if the cache entry has exceeded its TTL."""
@@ -65,49 +67,51 @@ class ResponseCache:
         Returns:
             The cached or freshly fetched result
         """
-        # Check cache and get task reference if needed
         async with self._lock:
-            if key in self._cache:
-                entry = self._cache[key]
-
-                # If there's an in-flight task, we'll wait for it
-                if entry.task and not entry.task.done():
-                    in_flight_task = entry.task
-                elif not entry.is_expired(self.ttl):
-                    # Valid cached result - return it
+            entry = self._cache.get(key)
+            if entry is not None and entry.task is not None and entry.task.done():
+                # Its starter was cancelled before it could settle the entry.
+                self._settle(key, entry)
+                entry = self._cache.get(key)
+            if entry is not None and entry.task is None:
+                if not entry.is_expired(self.ttl):
                     self._cache.move_to_end(key)
                     return entry.get_result()
-                else:
-                    # Expired entry - remove it and fetch new
-                    del self._cache[key]
-                    in_flight_task = None
-            else:
-                in_flight_task = None
-
-            # No in-flight task - create a new one
-            if in_flight_task is None:
+                del self._cache[key]
+                entry = None
+            if entry is None:
                 task = asyncio.create_task(fetch_func(*args, **kwargs))
-                self._cache[key] = CacheEntry(task=task)
+                entry = CacheEntry(task=task)
+                self._cache[key] = entry
+                task.add_done_callback(lambda _: self._settle(key, entry))
 
                 # LRU eviction
                 while len(self._cache) > self.max_size:
                     self._cache.popitem(last=False)
-            else:
-                # Use the existing in-flight task
-                task = in_flight_task
+            entry.waiters += 1
 
-        # Wait for the task outside the lock to avoid deadlock
+        # Shielded, so one cancelled caller does not cancel the fetch the others
+        # (and the cache) wait on. The last caller to leave cancels it instead: a
+        # fetch must not outlive its callers, nor its loop.
         try:
-            result = await task
-            async with self._lock:
-                if key in self._cache:
-                    self._cache[key] = CacheEntry(value=result)
-            return result
-        except Exception as e:
-            async with self._lock:
-                if key in self._cache:
-                    self._cache[key] = CacheEntry(error=e)
-            raise
+            return await asyncio.shield(entry.task)
+        finally:
+            entry.waiters -= 1
+            if entry.waiters == 0 and not entry.task.done():
+                entry.task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await asyncio.wait({entry.task})
+
+    def _settle(self, key: str, entry: CacheEntry) -> None:
+        """Keep what a finished fetch produced, or drop it when it was cancelled."""
+        if self._cache.get(key) is not entry or not entry.task.done():
+            return
+        if entry.task.cancelled():
+            del self._cache[key]
+        elif entry.task.exception() is not None:
+            self._cache[key] = CacheEntry(error=entry.task.exception())
+        else:
+            self._cache[key] = CacheEntry(value=entry.task.result())
 
     def clear(self):
         """Clear all cached entries."""
